@@ -1,90 +1,84 @@
-"""MonotaRO (www.monotaro.com) から型番で価格を取得するスクレイパー"""
+"""MonotaRO (www.monotaro.com) から型番で価格を取得するスクレイパー (Firefox版)"""
 
 import re
+import time
 from typing import Optional
 from playwright.sync_api import Page
+
 from ..models import PriceResult
 from ..config import scrape_delay
 
-
 SEARCH_URL = "https://www.monotaro.com/s/?c=&q={part_number}"
-PRICE_SELECTORS = [
-    ".price-block .price",
-    "[class*='price__value']",
-    "[class*='itemPrice']",
-    ".monotaro-price",
-    "[itemprop='price']",
-]
 
 
 def fetch_price(page: Page, part_number: str) -> PriceResult:
-    """
-    MonotaROで型番を検索し、単価を返す。
-    取得できない場合は unit_price=None で返す。
-    """
+    """MonotaROで型番を検索し、単価を返す"""
+    if page is None:
+        return PriceResult(
+            part_number=part_number, unit_price=None, source="monotaro",
+            error="ブラウザが初期化されていません",
+        )
     url = SEARCH_URL.format(part_number=part_number.replace(" ", "+"))
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(2)  # JS描画を待つ
         scrape_delay()
 
-        # 検索結果から最初の商品ページへ遷移
-        first_item = page.query_selector(
-            ".item-figure a, .search-result-item a[href*='/p/'], li.search-result a"
-        )
-        if first_item:
-            href = first_item.get_attribute("href")
-            if href:
-                product_url = href if href.startswith("http") else f"https://www.monotaro.com{href}"
-                page.goto(product_url, wait_until="domcontentloaded", timeout=20000)
-                scrape_delay()
-                return _extract_from_detail_page(page, part_number, page.url)
-
-        # 直接商品ページに遷移した場合
-        if "/p/" in page.url:
-            return _extract_from_detail_page(page, part_number, page.url)
-
-        return PriceResult(
-            part_number=part_number,
-            unit_price=None,
-            source="monotaro",
-            error="検索結果が見つかりませんでした",
-        )
-
-    except Exception as e:
-        return PriceResult(
-            part_number=part_number,
-            unit_price=None,
-            source="monotaro",
-            error=str(e),
-        )
-
-
-def _extract_from_detail_page(page: Page, part_number: str, url: str) -> PriceResult:
-    """商品詳細ページから価格・商品名を抽出する"""
-    product_name: Optional[str] = None
-    unit_price: Optional[float] = None
-
-    # 商品名取得
-    name_el = page.query_selector("h1.item-heading, h1[class*='item'], .product-name h1")
-    if not name_el:
-        name_el = page.query_selector("h1")
-    if name_el:
-        product_name = name_el.inner_text().strip()
-
-    # 価格取得
-    for selector in PRICE_SELECTORS:
-        el = page.query_selector(selector)
-        if el:
-            text = el.inner_text().strip()
-            price = _parse_price(text)
-            if price is not None:
-                unit_price = price
+        # 商品グループリンク /g/XXXXXXXX/ を探して商品ページへ
+        links = page.query_selector_all("a[href]")
+        product_url: Optional[str] = None
+        for link in links:
+            href = link.get_attribute("href") or ""
+            if re.search(r"/g/\d+/", href):
+                product_url = f"https://www.monotaro.com{href}" if href.startswith("/") else href
                 break
 
-    # セレクタで取れない場合、テキスト全体から正規表現で探す
+        if not product_url:
+            # 検索結果ページ自体に価格がある場合
+            return _extract_price_from_page(page, part_number, url)
+
+        # 商品ページへ移動
+        page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(2)
+        scrape_delay()
+
+        return _extract_price_from_page(page, part_number, product_url)
+
+    except Exception as e:
+        return PriceResult(part_number=part_number, unit_price=None, source="monotaro", error=str(e))
+
+
+def _extract_price_from_page(page: Page, part_number: str, url: str) -> PriceResult:
+    """ページから価格・商品名を取得する"""
+    unit_price: Optional[float] = None
+    product_name: Optional[str] = None
+
+    # 商品名
+    h1 = page.query_selector("h1")
+    if h1:
+        product_name = h1.inner_text().strip()
+
+    # 価格セレクタ (MonotaROは [class*='Price'] に価格を含む)
+    price_els = page.query_selector_all("[class*='Price'], [class*='price'], [itemprop='price']")
+    for el in price_els:
+        text = el.inner_text()
+        price = _extract_price_from_text(text)
+        if price and price > 10:
+            unit_price = price
+            break
+
+    # セレクタで見つからない場合、ページ全体のテキストから探す
     if unit_price is None:
         body_text = page.inner_text("body")
-        unit_price = _find_price_in_text(body_text)
+        matches = re.findall(r"[¥￥]([\d,]+)", body_text)
+        for m in matches:
+            try:
+                val = float(m.replace(",", ""))
+                if 10 < val < 10_000_000:
+                    unit_price = val
+                    break
+            except ValueError:
+                continue
 
     return PriceResult(
         part_number=part_number,
@@ -92,26 +86,18 @@ def _extract_from_detail_page(page: Page, part_number: str, url: str) -> PriceRe
         source="monotaro",
         product_name=product_name,
         url=url,
-        error=None if unit_price is not None else "価格要素が見つかりませんでした",
+        error=None if unit_price is not None else "価格が見つかりませんでした",
     )
 
 
-def _parse_price(text: str) -> Optional[float]:
-    """「¥1,234」「1,234円」などから数値を抽出する"""
-    cleaned = re.sub(r"[^\d]", "", text.split(".")[0])
-    try:
-        return float(cleaned) if cleaned else None
-    except ValueError:
-        return None
-
-
-def _find_price_in_text(text: str) -> Optional[float]:
-    """ページ全文から「¥数字」パターンを探す"""
-    matches = re.findall(r"[¥￥]\s*([\d,]+)", text)
+def _extract_price_from_text(text: str) -> Optional[float]:
+    """テキストから価格数値を抽出する"""
+    matches = re.findall(r"([\d,]+)円|[¥￥]([\d,]+)", text)
     for m in matches:
+        num_str = (m[0] or m[1]).replace(",", "")
         try:
-            val = float(m.replace(",", ""))
-            if val > 0:
+            val = float(num_str)
+            if 10 < val < 10_000_000:
                 return val
         except ValueError:
             continue

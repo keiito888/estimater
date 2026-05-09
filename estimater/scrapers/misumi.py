@@ -1,112 +1,87 @@
-"""Misumi (jp.misumi-ec.com) から型番で価格を取得するスクレイパー"""
+"""Misumi (jp.misumi-ec.com) から型番で価格を取得するスクレイパー (Firefox版)"""
 
 import re
+import time
 from typing import Optional
 from playwright.sync_api import Page
+
 from ..models import PriceResult
 from ..config import scrape_delay
 
-
 SEARCH_URL = "https://jp.misumi-ec.com/vona2/result/?Keyword={part_number}"
-PRICE_SELECTORS = [
-    ".price-block__price",
-    ".ec-price__number",
-    "[class*='price'] [class*='number']",
-    "[class*='Price'] [class*='value']",
-]
 
 
 def fetch_price(page: Page, part_number: str) -> PriceResult:
-    """
-    Misumiで型番を検索し、単価を返す。
-    取得できない場合は unit_price=None で返す。
-    """
+    """Misumiで型番を検索し、単価を返す"""
+    if page is None:
+        return PriceResult(
+            part_number=part_number, unit_price=None, source="misumi",
+            error="ブラウザが初期化されていません",
+        )
     url = SEARCH_URL.format(part_number=part_number.replace(" ", "+"))
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        page.goto(url, wait_until="networkidle", timeout=30000)
         scrape_delay()
-
-        # 検索結果ページか商品ページかを判定
-        # 型番が完全一致する場合は商品ページに直接遷移することがある
-        current_url = page.url
-        if "vona2/detail" in current_url or "detail" in current_url:
-            return _extract_from_detail_page(page, part_number, current_url)
-
-        # 検索結果一覧から最初のアイテムをクリック
-        first_item = page.query_selector(".c-search-result__item a, .product-list__item a")
-        if first_item:
-            first_item.click()
-            page.wait_for_load_state("domcontentloaded", timeout=15000)
-            scrape_delay()
-            return _extract_from_detail_page(page, part_number, page.url)
-
-        return PriceResult(
-            part_number=part_number,
-            unit_price=None,
-            source="misumi",
-            error="検索結果が見つかりませんでした",
-        )
-
+        return _extract_from_search_page(page, part_number, url)
     except Exception as e:
-        return PriceResult(
-            part_number=part_number,
-            unit_price=None,
-            source="misumi",
-            error=str(e),
-        )
+        return PriceResult(part_number=part_number, unit_price=None, source="misumi", error=str(e))
 
 
-def _extract_from_detail_page(page: Page, part_number: str, url: str) -> PriceResult:
-    """商品詳細ページから価格・商品名を抽出する"""
-    product_name: Optional[str] = None
+def _extract_from_search_page(page: Page, part_number: str, url: str) -> PriceResult:
+    """検索結果ページから直接価格を取得する"""
     unit_price: Optional[float] = None
+    product_name: Optional[str] = None
+    detail_url: Optional[str] = None
 
-    # 商品名取得
-    name_el = page.query_selector("h1, .product-name, [class*='product-title']")
-    if name_el:
-        product_name = name_el.inner_text().strip()
+    # 商品名と詳細URLを取得
+    detail_link = page.query_selector("a[href*='detail']")
+    if detail_link:
+        product_name = detail_link.inner_text().strip()
+        detail_url = detail_link.get_attribute("href")
 
-    # 価格取得 (複数セレクタを試す)
-    for selector in PRICE_SELECTORS:
-        el = page.query_selector(selector)
-        if el:
-            text = el.inner_text().strip()
-            price = _parse_price(text)
-            if price is not None:
-                unit_price = price
-                break
+    # 価格を取得: [class*='Price'] の中から数字を抽出
+    price_els = page.query_selector_all("[class*='Price'], [class*='price']")
+    for el in price_els:
+        text = el.inner_text()
+        price = _extract_price_from_text(text)
+        if price and price > 10:
+            unit_price = price
+            break
 
-    # セレクタで取れない場合、テキスト全体から正規表現で探す
-    if unit_price is None:
-        body_text = page.inner_text("body")
-        unit_price = _find_price_in_text(body_text)
+    # 見つからなければ詳細ページへ
+    if unit_price is None and detail_url:
+        try:
+            page.goto(detail_url, wait_until="networkidle", timeout=30000)
+            scrape_delay()
+            price_els2 = page.query_selector_all("[class*='Price'], [class*='price']")
+            for el in price_els2:
+                text = el.inner_text()
+                price = _extract_price_from_text(text)
+                if price and price > 10:
+                    unit_price = price
+                    break
+        except Exception:
+            pass
 
     return PriceResult(
         part_number=part_number,
         unit_price=unit_price,
         source="misumi",
         product_name=product_name,
-        url=url,
-        error=None if unit_price is not None else "価格要素が見つかりませんでした",
+        url=detail_url or url,
+        error=None if unit_price is not None else "価格が見つかりませんでした（ログイン必要な可能性あり）",
     )
 
 
-def _parse_price(text: str) -> Optional[float]:
-    """「¥1,234」「1,234円」などから数値を抽出する"""
-    cleaned = re.sub(r"[^\d,.]", "", text.replace(",", ""))
-    try:
-        return float(cleaned) if cleaned else None
-    except ValueError:
-        return None
-
-
-def _find_price_in_text(text: str) -> Optional[float]:
-    """ページ全文から「¥数字」パターンを探す"""
-    matches = re.findall(r"[¥￥]\s*([\d,]+)", text)
+def _extract_price_from_text(text: str) -> Optional[float]:
+    """テキストから価格数値を抽出する"""
+    # 「4,860円」「¥4,860」「4,860」などにマッチ
+    matches = re.findall(r"([\d,]+)円|[¥￥]([\d,]+)", text)
     for m in matches:
+        num_str = (m[0] or m[1]).replace(",", "")
         try:
-            val = float(m.replace(",", ""))
-            if val > 0:
+            val = float(num_str)
+            if 10 < val < 10_000_000:
                 return val
         except ValueError:
             continue
