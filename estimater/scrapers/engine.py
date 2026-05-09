@@ -81,10 +81,10 @@ def _fetch_single(page: Page, part: Part) -> PriceResult:
             return fallback if fallback.unit_price is not None else result
 
     else:
-        # 仕入先未指定: Misumi優先
-        result = misumi.fetch_price(page, part.part_number)
+        # 仕入先未指定: MonotaRO優先（Misumiはブロックされるため）
+        result = monotaro.fetch_price(page, part.part_number)
         if result.unit_price is None:
-            fallback = monotaro.fetch_price(page, part.part_number)
+            fallback = misumi.fetch_price(page, part.part_number)
             return fallback if fallback.unit_price is not None else result
 
     return result
