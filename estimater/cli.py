@@ -14,6 +14,7 @@ from .sheets.reader import read_parts, write_back_part_info
 from .sheets.writer import write_quote
 from .sheets.cache import load_cache, save_cache, clear_cache
 from .sheets.setup import setup_spreadsheet, read_settings
+from .notify.slack import notify_complete, notify_error, is_enabled as slack_enabled
 
 app = typer.Typer(help="制御盤向け電気部品 自動見積もりツール")
 console = Console()
@@ -97,6 +98,12 @@ def run(
 
     ok_count = sum(1 for r in results if r.unit_price is not None)
     ng_count = len(results) - ok_count
+    total_price = sum(
+        r.unit_price * p.quantity
+        for p, r in zip(parts, results)
+        if r.unit_price is not None
+    )
+
     console.print(f"\n[green]✓ 完了[/green]  成功: {ok_count} 件  ", end="")
     if ng_count:
         console.print(f"[red]要確認: {ng_count} 件[/red]")
@@ -106,6 +113,14 @@ def run(
         console.print(f"[cyan]補完: メーカー・品名を {filled} セル自動入力しました[/cyan]")
     console.print(f"スプレッドシートの「見積書」シートを確認してください。")
     console.print(f"URL: https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit")
+
+    # Slack 通知
+    if slack_enabled():
+        sent = notify_complete(ok_count, ng_count, total_price, spreadsheet_id, filled)
+        if sent:
+            console.print("[green]✓ Slack に通知しました[/green]")
+        else:
+            console.print("[yellow]Slack 通知に失敗しました (URL を確認してください)[/yellow]")
 
 
 @app.command()
@@ -197,17 +212,32 @@ def _run_estimation(spreadsheet_id: str, spreadsheet) -> None:
     if not parts:
         raise ValueError("入力シートに部品が見つかりません")
 
-    cache = load_cache(spreadsheet)
-    results = fetch_prices(parts, cache)
-    _print_results_table(parts, results)
+    try:
+        cache = load_cache(spreadsheet)
+        results = fetch_prices(parts, cache)
+        _print_results_table(parts, results)
 
-    save_cache(spreadsheet, results)
-    write_back_part_info(spreadsheet, parts, results)
-    items = [
-        QuoteItem(row_num=i + 1, part=part, price_result=result)
-        for i, (part, result) in enumerate(zip(parts, results))
-    ]
-    write_quote(spreadsheet, items, company_name=company_name, tax_rate=tax_rate)
+        save_cache(spreadsheet, results)
+        filled = write_back_part_info(spreadsheet, parts, results)
+        items = [
+            QuoteItem(row_num=i + 1, part=part, price_result=result)
+            for i, (part, result) in enumerate(zip(parts, results))
+        ]
+        write_quote(spreadsheet, items, company_name=company_name, tax_rate=tax_rate)
+
+        # Slack 通知
+        ok_count = sum(1 for r in results if r.unit_price is not None)
+        ng_count = len(results) - ok_count
+        total_price = sum(
+            r.unit_price * p.quantity
+            for p, r in zip(parts, results)
+            if r.unit_price is not None
+        )
+        notify_complete(ok_count, ng_count, total_price, spreadsheet_id, filled)
+
+    except Exception as e:
+        notify_error(str(e), spreadsheet_id)
+        raise
 
 
 @app.command()
