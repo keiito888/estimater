@@ -60,7 +60,7 @@ def save_cache(
     new_rows: list[list] = []
 
     for result in results:
-        if result.source == "cache":
+        if result.from_cache:
             continue  # キャッシュから取得したものは再保存しない
         if result.unit_price is None:
             continue  # 取得失敗はキャッシュしない

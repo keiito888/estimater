@@ -55,7 +55,7 @@ def fetch_prices(parts: list[Part], cache: dict[str, PriceResult]) -> list[Price
                     results.append(manual_results[part.part_number])
                 elif part.part_number in cache:
                     cached = cache[part.part_number]
-                    cached.source = "cache"
+                    cached.from_cache = True
                     results.append(cached)
                 else:
                     results.append(_fetch_single(page, part))
@@ -67,7 +67,7 @@ def fetch_prices(parts: list[Part], cache: dict[str, PriceResult]) -> list[Price
                 results.append(manual_results[part.part_number])
             else:
                 cached = cache[part.part_number]
-                cached.source = "cache"
+                cached.from_cache = True
                 results.append(cached)
 
     return results

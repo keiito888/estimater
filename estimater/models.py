@@ -21,10 +21,11 @@ class PriceResult:
     """価格取得結果"""
     part_number: str
     unit_price: Optional[float]         # 取得できなかった場合は None
-    source: Optional[str]               # "misumi" / "monotaro" / "cache"
+    source: Optional[str]               # "misumi" / "monotaro" / "rs" etc.
     product_name: Optional[str] = None  # サイト上の商品名
     url: Optional[str] = None           # 取得元URL
     error: Optional[str] = None         # エラーメッセージ
+    from_cache: bool = False            # キャッシュから取得した場合は True
 
 
 @dataclass
