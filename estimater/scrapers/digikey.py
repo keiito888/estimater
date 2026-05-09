@@ -1,95 +1,190 @@
-"""Digi-Key (digikey.jp) から型番で価格を取得するスクレイパー"""
+"""Digi-Key API v4 から型番で価格を取得するスクレイパー
 
-import re
+環境変数:
+    DIGIKEY_CLIENT_ID     - developer.digikey.com で発行した Client ID
+    DIGIKEY_CLIENT_SECRET - 同 Client Secret
+
+未設定の場合は「設定なし」エラーを返す（Playwrightは使用しない）。
+"""
+
+import os
 import time
+import re
 from typing import Optional
 from playwright.sync_api import Page
 
-from ..models import PriceResult
-from ..config import scrape_delay
+import requests
 
-SEARCH_URL = "https://www.digikey.jp/ja/products/result?keywords={part_number}"
+from ..models import PriceResult
+from ..config import _PROJECT_ROOT
+from dotenv import load_dotenv
+
+load_dotenv(_PROJECT_ROOT / ".env")
+
+TOKEN_URL   = "https://api.digikey.com/v1/oauth2/token"
+SEARCH_URL  = "https://api.digikey.com/products/v4/search/keyword"
+
+# インメモリトークンキャッシュ
+_token_cache: dict = {"access_token": None, "expires_at": 0.0}
+
+
+def _get_token() -> Optional[str]:
+    """Client Credentials フローでアクセストークンを取得（10分キャッシュ）"""
+    now = time.time()
+    if _token_cache["access_token"] and now < _token_cache["expires_at"] - 30:
+        return _token_cache["access_token"]
+
+    client_id     = os.getenv("DIGIKEY_CLIENT_ID", "")
+    client_secret = os.getenv("DIGIKEY_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return None
+
+    resp = requests.post(
+        TOKEN_URL,
+        data={
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "grant_type":    "client_credentials",
+        },
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        return None
+
+    data = resp.json()
+    _token_cache["access_token"] = data.get("access_token")
+    _token_cache["expires_at"]   = now + int(data.get("expires_in", 599))
+    return _token_cache["access_token"]
 
 
 def fetch_price(page: Page, part_number: str) -> PriceResult:
-    """Digi-Keyで型番を検索し、単価を返す"""
-    url = SEARCH_URL.format(part_number=part_number.replace(" ", "+"))
+    """
+    Digi-Key API v4 で型番を検索し、単価を返す。
+    page 引数は使用しない（API呼び出しのみ）。
+    """
+    client_id = os.getenv("DIGIKEY_CLIENT_ID", "")
+    if not client_id:
+        return PriceResult(
+            part_number=part_number,
+            unit_price=None,
+            source="digikey",
+            error="DIGIKEY_CLIENT_ID / DIGIKEY_CLIENT_SECRET が未設定です",
+        )
+
+    token = _get_token()
+    if not token:
+        return PriceResult(
+            part_number=part_number,
+            unit_price=None,
+            source="digikey",
+            error="Digi-Key APIトークンの取得に失敗しました",
+        )
+
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(2)
-        scrape_delay()
+        resp = requests.post(
+            SEARCH_URL,
+            headers={
+                "X-DIGIKEY-Client-Id":        client_id,
+                "Authorization":              f"Bearer {token}",
+                "X-DIGIKEY-Locale-Site":      "JP",
+                "X-DIGIKEY-Locale-Language":  "ja",
+                "X-DIGIKEY-Locale-Currency":  "JPY",
+                "Content-Type":               "application/json",
+                "Accept":                     "application/json",
+            },
+            json={"Keywords": part_number, "Limit": 5},
+            timeout=15,
+        )
 
-        current_url = page.url
+        if resp.status_code != 200:
+            return PriceResult(
+                part_number=part_number,
+                unit_price=None,
+                source="digikey",
+                error=f"APIエラー: HTTP {resp.status_code}",
+            )
 
-        # 直接商品ページに遷移した場合
-        if "/ja/products/detail/" in current_url or "/product-detail/" in current_url:
-            return _extract_from_detail(page, part_number, current_url)
+        data = resp.json()
+        products = data.get("Products") or []
 
-        # 検索結果から最初の商品リンクを探す
-        for sel in [
-            "a[href*='/ja/products/detail/']",
-            "a[href*='/product-detail/']",
-            "td.product a",
-        ]:
-            link = page.query_selector(sel)
-            if link:
-                href = link.get_attribute("href") or ""
-                product_url = href if href.startswith("http") else f"https://www.digikey.jp{href}"
-                page.goto(product_url, wait_until="domcontentloaded", timeout=25000)
-                time.sleep(2)
-                return _extract_from_detail(page, part_number, page.url)
+        if not products:
+            return PriceResult(
+                part_number=part_number,
+                unit_price=None,
+                source="digikey",
+                error="商品が見つかりませんでした",
+            )
 
-        # 検索結果ページ自体から価格を探す
-        return _extract_from_detail(page, part_number, current_url)
+        # 最初の商品の価格を取得
+        product     = products[0]
+        unit_price  = _extract_price(product)
+        product_url = product.get("ProductUrl") or ""
+        product_name = _build_product_name(product)
+
+        return PriceResult(
+            part_number=part_number,
+            unit_price=unit_price,
+            source="digikey",
+            product_name=product_name,
+            url=product_url,
+            error=None if unit_price else "価格が見つかりませんでした",
+        )
 
     except Exception as e:
-        return PriceResult(part_number=part_number, unit_price=None, source="digikey", error=str(e))
+        return PriceResult(
+            part_number=part_number,
+            unit_price=None,
+            source="digikey",
+            error=str(e),
+        )
 
 
-def _extract_from_detail(page: Page, part_number: str, url: str) -> PriceResult:
-    product_name: Optional[str] = None
-    unit_price: Optional[float] = None
+def _extract_price(product: dict) -> Optional[float]:
+    """APIレスポンスから単価を取得する"""
+    # UnitPrice フィールド (数値型)
+    unit_price = product.get("UnitPrice")
+    if unit_price is not None:
+        try:
+            val = float(unit_price)
+            if val > 0:
+                return val
+        except (ValueError, TypeError):
+            pass
 
-    h1 = page.query_selector("h1")
-    if h1:
-        product_name = h1.inner_text().strip()
+    # PricingTiers から 1個単価を取得
+    tiers = product.get("PricingTiers") or []
+    for tier in tiers:
+        if tier.get("BreakQuantity") == 1:
+            price = tier.get("UnitPrice") or tier.get("TotalPrice")
+            if price:
+                try:
+                    val = float(price)
+                    if val > 0:
+                        return val
+                except (ValueError, TypeError):
+                    pass
 
-    for sel in [
-        "[class*='price']", "[class*='Price']",
-        "td[class*='price']", "[data-testid*='price']",
-    ]:
-        els = page.query_selector_all(sel)
-        for el in els:
-            price = _parse_price(el.inner_text())
-            if price and price > 10:
-                unit_price = price
-                break
-        if unit_price:
-            break
+    # 最初のティアの価格
+    if tiers:
+        price = tiers[0].get("UnitPrice") or tiers[0].get("TotalPrice")
+        if price:
+            try:
+                val = float(price)
+                if val > 0:
+                    return val
+            except (ValueError, TypeError):
+                pass
 
-    if unit_price is None:
-        body = page.inner_text("body")
-        prices = re.findall(r"[¥￥]([\d,]+)", body)
-        for p in prices:
-            val = _parse_price(p)
-            if val and val > 10:
-                unit_price = val
-                break
-
-    return PriceResult(
-        part_number=part_number,
-        unit_price=unit_price,
-        source="digikey",
-        product_name=product_name,
-        url=url,
-        error=None if unit_price else "価格が見つかりませんでした",
-    )
+    return None
 
 
-def _parse_price(text: str) -> Optional[float]:
-    cleaned = re.sub(r"[^\d]", "", str(text).split(".")[0])
-    try:
-        val = float(cleaned) if cleaned else None
-        return val if val and val > 0 else None
-    except ValueError:
-        return None
+def _build_product_name(product: dict) -> str:
+    """商品名文字列を組み立てる"""
+    parts = []
+    manufacturer = (product.get("Manufacturer") or {}).get("Name", "")
+    if manufacturer:
+        parts.append(manufacturer)
+    description = product.get("ProductDescription") or ""
+    if description:
+        parts.append(description)
+    return " ".join(parts) if parts else (product.get("ManufacturerPartNumber") or "")
