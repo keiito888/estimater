@@ -106,14 +106,96 @@ def setup(
     """スプレッドシートの初期セットアップ (シート作成・サンプルデータ)"""
     spreadsheet_id = sheet_id or get_spreadsheet_id()
 
+    from .sheets.watcher import setup_control_sheet
+
     with Progress(SpinnerColumn("line"), TextColumn("{task.description}"), console=console) as progress:
         task = progress.add_task("セットアップ中...", total=None)
         spreadsheet = get_spreadsheet(spreadsheet_id)
         progress.update(task, description="シートを作成しています...")
         setup_spreadsheet(spreadsheet)
+        progress.update(task, description="制御シートを作成しています...")
+        gas_code = setup_control_sheet(spreadsheet)
 
     console.print("[green]✓ セットアップ完了[/green]")
-    console.print("「入力」シートに部品情報を入力してから [bold]estimater run[/bold] を実行してください。")
+    console.print("\n[bold]スプレッドシートにボタンを設置する手順:[/bold]")
+    console.print("  1. スプレッドシートを開く")
+    console.print("  2. 上部メニュー「拡張機能」→「Apps Script」")
+    console.print("  3. 表示されたエディタに以下のコードを貼り付けて保存 (Ctrl+S)")
+    console.print("  4. スプレッドシートを再読み込みすると「見積もりツール」メニューが追加される\n")
+    console.print("[bold cyan]--- GASコード (ここからコピー) ---[/bold cyan]")
+    console.print(gas_code)
+    console.print("[bold cyan]--- ここまで ---[/bold cyan]\n")
+    console.print("ボタンを使う場合は別ターミナルで先に監視を起動してください:")
+    console.print("  [bold]py -m estimater watch[/bold]")
+
+
+@app.command()
+def watch(
+    sheet_id: Optional[str] = typer.Option(
+        None, "--sheet", "-s", help="スプレッドシートID"
+    ),
+    interval: int = typer.Option(5, "--interval", "-i", help="監視間隔 (秒)"),
+) -> None:
+    """スプレッドシートの「実行」ボタンを監視し、押されたら自動で見積もりを実行する"""
+    import time as _time
+    from .sheets.client import get_spreadsheet
+    from .sheets.watcher import get_trigger_status, set_trigger_status, TRIGGER_SHEET
+
+    spreadsheet_id = sheet_id or get_spreadsheet_id()
+    spreadsheet = get_spreadsheet(spreadsheet_id)
+
+    console.print(f"[bold]監視を開始しました[/bold] (確認間隔: {interval}秒)")
+    console.print(f"スプレッドシートの「[cyan]見積もり実行[/cyan]」ボタンを押すと自動で実行されます。")
+    console.print("[dim]停止するには Ctrl+C を押してください[/dim]\n")
+
+    while True:
+        try:
+            status = get_trigger_status(spreadsheet)
+            if status == "RUN":
+                console.print(f"\n[green]▶ 実行トリガーを検知しました！見積もりを開始します...[/green]")
+                set_trigger_status(spreadsheet, "実行中...")
+                try:
+                    _run_estimation(spreadsheet_id, spreadsheet)
+                    set_trigger_status(spreadsheet, "✓ 完了")
+                except Exception as e:
+                    set_trigger_status(spreadsheet, f"✗ エラー: {str(e)[:50]}")
+                    console.print(f"[red]エラー: {e}[/red]")
+            _time.sleep(interval)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]監視を停止しました[/yellow]")
+            break
+        except Exception as e:
+            console.print(f"[red]監視エラー: {e}[/red]")
+            _time.sleep(interval)
+
+
+def _run_estimation(spreadsheet_id: str, spreadsheet) -> None:
+    """見積もりの実行処理（run コマンドと共通）"""
+    from .sheets.reader import read_parts
+    from .sheets.writer import write_quote
+    from .sheets.cache import load_cache, save_cache
+    from .sheets.setup import read_settings
+    from .scrapers.engine import fetch_prices
+    from .models import QuoteItem
+
+    settings = read_settings(spreadsheet)
+    company_name = settings.get("自社名", "")
+    tax_rate = float(settings.get("消費税率", "0.10"))
+
+    parts = read_parts(spreadsheet)
+    if not parts:
+        raise ValueError("入力シートに部品が見つかりません")
+
+    cache = load_cache(spreadsheet)
+    results = fetch_prices(parts, cache)
+    _print_results_table(parts, results)
+
+    save_cache(spreadsheet, results)
+    items = [
+        QuoteItem(row_num=i + 1, part=part, price_result=result)
+        for i, (part, result) in enumerate(zip(parts, results))
+    ]
+    write_quote(spreadsheet, items, company_name=company_name, tax_rate=tax_rate)
 
 
 @app.command()
