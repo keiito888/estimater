@@ -5,6 +5,7 @@ from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 from ..models import Part, PriceResult
 from ..config import is_headless
 from . import misumi, monotaro
+from .session import load_misumi_session, has_misumi_session
 
 
 def fetch_prices(parts: list[Part], cache: dict[str, PriceResult]) -> list[PriceResult]:
@@ -19,7 +20,9 @@ def fetch_prices(parts: list[Part], cache: dict[str, PriceResult]) -> list[Price
         with sync_playwright() as pw:
             # Firefox を使用 (Chromiumよりボット検出を受けにくい)
             browser = pw.firefox.launch(headless=is_headless())
-            context = _create_context(browser)
+            # Misumiのセッションがあれば読み込む
+            session_state = load_misumi_session() if has_misumi_session() else None
+            context = _create_context(browser, storage_state=session_state)
             page = context.new_page()
 
             for part in parts:
@@ -67,9 +70,11 @@ def _fetch_single(page: Page, part: Part) -> PriceResult:
     return result
 
 
-def _create_context(browser: Browser) -> BrowserContext:
-    """Firefox コンテキストを設定する"""
-    return browser.new_context(
+def _create_context(
+    browser: Browser, storage_state: dict | None = None
+) -> BrowserContext:
+    """Firefox コンテキストを設定する。storage_state があればセッションを復元する。"""
+    kwargs = dict(
         user_agent=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) "
             "Gecko/20100101 Firefox/126.0"
@@ -83,3 +88,6 @@ def _create_context(browser: Browser) -> BrowserContext:
             "DNT": "1",
         },
     )
+    if storage_state:
+        kwargs["storage_state"] = storage_state
+    return browser.new_context(**kwargs)

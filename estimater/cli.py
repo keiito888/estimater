@@ -117,6 +117,53 @@ def setup(
 
 
 @app.command()
+def login(
+    site: str = typer.Argument("misumi", help="ログインするサイト: misumi または monotaro"),
+) -> None:
+    """ブラウザを開いてサイトにログインし、セッションを保存する"""
+    from playwright.sync_api import sync_playwright
+    from .scrapers.session import (
+        MISUMI_LOGIN_URL, save_misumi_session, MISUMI_SESSION_FILE
+    )
+
+    site = site.lower().strip()
+    if site not in ("misumi", "monotaro"):
+        console.print(f"[red]エラー: サイトは 'misumi' または 'monotaro' を指定してください[/red]")
+        raise typer.Exit(1)
+
+    login_url = MISUMI_LOGIN_URL if site == "misumi" else "https://www.monotaro.com/login.html"
+
+    console.print(f"[bold]ブラウザを開きます。{site} にログインしてください。[/bold]")
+    console.print("ログイン完了後、ブラウザを閉じると自動的にセッションが保存されます。")
+    console.print(f"ログインURL: {login_url}\n")
+
+    with sync_playwright() as pw:
+        browser = pw.firefox.launch(headless=False)
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) "
+                "Gecko/20100101 Firefox/126.0"
+            ),
+            locale="ja-JP",
+            viewport={"width": 1280, "height": 800},
+        )
+        page = context.new_page()
+        page.goto(login_url)
+
+        console.print("[yellow]ブラウザでログインしてください。完了したら Enter を押してください...[/yellow]")
+        input()
+
+        # セッション（Cookie）を保存
+        storage = context.storage_state()
+        if site == "misumi":
+            save_misumi_session(storage)
+            console.print(f"[green]✓ Misumiセッションを保存しました: {MISUMI_SESSION_FILE}[/green]")
+        browser.close()
+
+    console.print("次回から py -m estimater run を実行するとログイン済み状態でスクレイピングします。")
+
+
+@app.command()
 def cache_clear(
     sheet_id: Optional[str] = typer.Option(
         None, "--sheet", "-s", help="スプレッドシートID"

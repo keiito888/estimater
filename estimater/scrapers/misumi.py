@@ -7,6 +7,7 @@ from playwright.sync_api import Page
 
 from ..models import PriceResult
 from ..config import scrape_delay
+from .session import has_misumi_session
 
 SEARCH_URL = "https://jp.misumi-ec.com/vona2/result/?Keyword={part_number}"
 
@@ -17,6 +18,11 @@ def fetch_price(page: Page, part_number: str) -> PriceResult:
         return PriceResult(
             part_number=part_number, unit_price=None, source="misumi",
             error="ブラウザが初期化されていません",
+        )
+    if not has_misumi_session():
+        return PriceResult(
+            part_number=part_number, unit_price=None, source="misumi",
+            error="Misumiにログインしていません。'py -m estimater login misumi' を実行してください",
         )
     url = SEARCH_URL.format(part_number=part_number.replace(" ", "+"))
     try:
