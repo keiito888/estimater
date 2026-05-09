@@ -4,7 +4,7 @@ from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page  
 
 from ..models import Part, PriceResult
 from ..config import is_headless
-from . import monotaro, rs, amazon, digikey, trusco, askul
+from . import monotaro, rs, amazon, digikey, trusco, askul, mouser
 
 
 # 仕入先名 → スクレイパーモジュールのマッピング
@@ -13,12 +13,13 @@ SCRAPERS = {
     "rs":        rs,
     "amazon":    amazon,
     "digikey":   digikey,
+    "mouser":    mouser,
     "trusco":    trusco,
     "askul":     askul,
 }
 
 # 仕入先未指定時に試すソースの優先順
-DEFAULT_SOURCES = ["monotaro", "rs", "amazon", "digikey", "trusco", "askul"]
+DEFAULT_SOURCES = ["monotaro", "rs", "amazon", "digikey", "mouser", "trusco", "askul"]
 
 # キャッシュの型: {型番: {仕入先: PriceResult}}
 CacheType = dict[str, dict[str, PriceResult]]
