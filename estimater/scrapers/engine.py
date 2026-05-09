@@ -1,11 +1,11 @@
 """価格取得エンジン: 複数ソースから価格を取得して最安値を選択"""
 
-from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
+from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page  # noqa: F401
 
 from ..models import Part, PriceResult
 from ..config import is_headless
-from . import misumi, monotaro, rs, amazon, digikey, trusco
-from .session import load_misumi_session, has_misumi_session
+from . import monotaro, rs, amazon, digikey, trusco, askul
+
 
 # 仕入先名 → スクレイパーモジュールのマッピング
 SCRAPERS = {
@@ -14,11 +14,11 @@ SCRAPERS = {
     "amazon":    amazon,
     "digikey":   digikey,
     "trusco":    trusco,
-    "misumi":    misumi,
+    "askul":     askul,
 }
 
 # 仕入先未指定時に試すソースの優先順
-DEFAULT_SOURCES = ["monotaro", "rs", "amazon", "digikey", "trusco"]
+DEFAULT_SOURCES = ["monotaro", "rs", "amazon", "digikey", "trusco", "askul"]
 
 # キャッシュの型: {型番: {仕入先: PriceResult}}
 CacheType = dict[str, dict[str, PriceResult]]
@@ -64,8 +64,7 @@ def fetch_prices(
     if scrape_needed:
         with sync_playwright() as pw:
             browser = pw.firefox.launch(headless=is_headless())
-            session_state = load_misumi_session() if has_misumi_session() else None
-            context = _create_context(browser, storage_state=session_state)
+            context = _create_context(browser)
             page = context.new_page()
 
             for part, src in scrape_needed:
@@ -118,10 +117,8 @@ def _sources_for_part(part: Part) -> list[str]:
     return DEFAULT_SOURCES
 
 
-def _create_context(
-    browser: Browser, storage_state: dict | None = None
-) -> BrowserContext:
-    kwargs = dict(
+def _create_context(browser: Browser) -> BrowserContext:
+    return browser.new_context(
         user_agent=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) "
             "Gecko/20100101 Firefox/126.0"
@@ -135,6 +132,3 @@ def _create_context(
             "DNT": "1",
         },
     )
-    if storage_state:
-        kwargs["storage_state"] = storage_state
-    return browser.new_context(**kwargs)

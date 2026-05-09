@@ -71,13 +71,13 @@ def ensure_input_sheet(spreadsheet: gspread.Spreadsheet) -> None:
         ws = spreadsheet.add_worksheet(title=SHEET_NAME, rows=1000, cols=10)
         ws.update(
             "A1:G1",
-            [["部品種別", "メーカー", "型番", "数量", "仕入先希望 (monotaro/rs/amazon/digikey/trusco/misumi)", "備考", "手動単価 (円)"]],
+            [["部品種別", "メーカー", "型番", "数量", "仕入先希望 (monotaro/rs/amazon/digikey/trusco/askul)", "備考", "手動単価 (円)"]],
         )
         # サンプルデータ
         ws.update(
             "A2:G4",
             [
-                ["遮断器", "三菱電機", "NF30-CS 3P 5A", "2", "misumi", "主幹", ""],
+                ["遮断器", "三菱電機", "NF30-CS 3P 5A", "2", "monotaro", "主幹", ""],
                 ["電磁接触器", "富士電機", "SC-N1", "4", "monotaro", "", ""],
                 ["端子台", "", "MKDS 1.5/2", "20", "", "", ""],
             ],
