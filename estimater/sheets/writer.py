@@ -9,7 +9,7 @@ from .client import get_or_create_sheet
 SHEET_NAME = "見積書"
 
 # 列定義
-COLS = ["No", "部品種別", "メーカー", "型番", "数量", "単価 (円)", "小計 (円)", "仕入先", "商品URL", "備考", "状態"]
+COLS = ["No", "部品種別", "メーカー", "型番", "品名 (取得値)", "数量", "単価 (円)", "小計 (円)", "仕入先", "商品URL", "備考", "状態"]
 
 
 def write_quote(
@@ -49,6 +49,7 @@ def write_quote(
             item.part.category,
             item.part.maker,
             item.part.part_number,
+            item.price_result.product_name or "",
             item.part.quantity,
             f"{unit_price:,.0f}" if unit_price is not None else "要確認",
             f"{subtotal:,.0f}" if subtotal is not None else "要確認",
@@ -60,17 +61,17 @@ def write_quote(
 
     # 合計行
     rows.append([])
-    rows.append(["", "", "", "", "", "小計", f"{subtotal_sum:,.0f}", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "小計", f"{subtotal_sum:,.0f}", "", "", "", ""])
 
     tax = subtotal_sum * tax_rate
-    rows.append(["", "", "", "", "", f"消費税 ({int(tax_rate * 100)}%)", f"{tax:,.0f}", "", "", "", ""])
-    rows.append(["", "", "", "", "", "合計 (税込)", f"{subtotal_sum + tax:,.0f}", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", f"消費税 ({int(tax_rate * 100)}%)", f"{tax:,.0f}", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "合計 (税込)", f"{subtotal_sum + tax:,.0f}", "", "", "", ""])
 
     ws.update("A1", rows)
 
     # 列ヘッダー行を太字に
     header_row = 5 if not company_name else 6
-    ws.format(f"A{header_row}:K{header_row}", {"textFormat": {"bold": True}})
+    ws.format(f"A{header_row}:L{header_row}", {"textFormat": {"bold": True}})
 
     # タイトル行を大きく
     ws.format("A1", {"textFormat": {"bold": True, "fontSize": 14}})

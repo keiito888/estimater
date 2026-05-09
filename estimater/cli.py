@@ -10,7 +10,7 @@ from .config import get_spreadsheet_id
 from .models import QuoteItem
 from .scrapers.engine import fetch_prices
 from .sheets.client import get_spreadsheet
-from .sheets.reader import read_parts
+from .sheets.reader import read_parts, write_back_part_info
 from .sheets.writer import write_quote
 from .sheets.cache import load_cache, save_cache, clear_cache
 from .sheets.setup import setup_spreadsheet, read_settings
@@ -86,6 +86,15 @@ def run(
         ]
         write_quote(spreadsheet, items, company_name=company_name, tax_rate=tax_rate)
 
+    # 入力シートのメーカー・部品種別を補完
+    with Progress(SpinnerColumn("line"), TextColumn("{task.description}"), console=console) as progress:
+        task = progress.add_task("メーカー・品名を補完しています...", total=None)
+        filled = write_back_part_info(spreadsheet, parts, results)
+        if filled:
+            progress.update(task, description=f"メーカー・品名を {filled} 件補完しました")
+        else:
+            progress.update(task, description="補完対象なし（既入力 or 取得不可）")
+
     ok_count = sum(1 for r in results if r.unit_price is not None)
     ng_count = len(results) - ok_count
     console.print(f"\n[green]✓ 完了[/green]  成功: {ok_count} 件  ", end="")
@@ -93,6 +102,8 @@ def run(
         console.print(f"[red]要確認: {ng_count} 件[/red]")
     else:
         console.print("")
+    if filled:
+        console.print(f"[cyan]補完: メーカー・品名を {filled} セル自動入力しました[/cyan]")
     console.print(f"スプレッドシートの「見積書」シートを確認してください。")
     console.print(f"URL: https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit")
 
@@ -171,7 +182,7 @@ def watch(
 
 def _run_estimation(spreadsheet_id: str, spreadsheet) -> None:
     """見積もりの実行処理（run コマンドと共通）"""
-    from .sheets.reader import read_parts
+    from .sheets.reader import read_parts, write_back_part_info
     from .sheets.writer import write_quote
     from .sheets.cache import load_cache, save_cache
     from .sheets.setup import read_settings
@@ -191,6 +202,7 @@ def _run_estimation(spreadsheet_id: str, spreadsheet) -> None:
     _print_results_table(parts, results)
 
     save_cache(spreadsheet, results)
+    write_back_part_info(spreadsheet, parts, results)
     items = [
         QuoteItem(row_num=i + 1, part=part, price_result=result)
         for i, (part, result) in enumerate(zip(parts, results))
