@@ -34,7 +34,7 @@ def run(
 
     spreadsheet_id = sheet_id or get_spreadsheet_id()
 
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
+    with Progress(SpinnerColumn("line"), TextColumn("{task.description}"), console=console) as progress:
         task = progress.add_task("スプレッドシートに接続中...", total=None)
         spreadsheet = get_spreadsheet(spreadsheet_id)
         progress.update(task, description="スプレッドシートに接続しました")
@@ -56,7 +56,7 @@ def run(
     # キャッシュ読み込み
     cache: dict = {}
     if not no_cache:
-        with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
+        with Progress(SpinnerColumn("line"), TextColumn("{task.description}"), console=console) as progress:
             task = progress.add_task("キャッシュを読み込んでいます...", total=None)
             cache = load_cache(spreadsheet)
         cached_count = sum(1 for p in parts if p.part_number in cache)
@@ -74,7 +74,7 @@ def run(
     _print_results_table(parts, results)
 
     # キャッシュ保存
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
+    with Progress(SpinnerColumn("line"), TextColumn("{task.description}"), console=console) as progress:
         task = progress.add_task("キャッシュを保存しています...", total=None)
         save_cache(spreadsheet, results)
 
@@ -106,7 +106,7 @@ def setup(
     """スプレッドシートの初期セットアップ (シート作成・サンプルデータ)"""
     spreadsheet_id = sheet_id or get_spreadsheet_id()
 
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
+    with Progress(SpinnerColumn("line"), TextColumn("{task.description}"), console=console) as progress:
         task = progress.add_task("セットアップ中...", total=None)
         spreadsheet = get_spreadsheet(spreadsheet_id)
         progress.update(task, description="シートを作成しています...")

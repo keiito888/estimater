@@ -6,7 +6,9 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# パッケージルート (estimater/) の2階層上 = プロジェクトルートの .env を確実に読み込む
+_PROJECT_ROOT = Path(__file__).parent.parent
+load_dotenv(_PROJECT_ROOT / ".env")
 
 
 def get_spreadsheet_id() -> str:
