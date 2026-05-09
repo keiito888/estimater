@@ -20,11 +20,23 @@ SCRAPERS = {
 # 仕入先未指定時に試すソースの優先順
 DEFAULT_SOURCES = ["monotaro", "rs", "amazon", "digikey", "trusco"]
 
+# キャッシュの型: {型番: {仕入先: PriceResult}}
+CacheType = dict[str, dict[str, PriceResult]]
 
-def fetch_prices(parts: list[Part], cache: dict[str, PriceResult]) -> list[PriceResult]:
+
+def fetch_prices(
+    parts: list[Part],
+    cache: CacheType,
+) -> tuple[list[PriceResult], list[PriceResult]]:
     """
-    部品リストの価格を一括取得する。
-    キャッシュ・手動入力済みの型番はスクレイピングをスキップする。
+    部品リストの価格を取得する。
+
+    - 仕入先ごとにキャッシュを確認し、未キャッシュのソースのみスクレイピング。
+    - 全ソースの結果（キャッシュ + 新規取得）を比較して最安値を選択。
+
+    戻り値:
+        results:        各部品の最安値 PriceResult のリスト (見積書に使用)
+        newly_scraped:  今回新規に取得した PriceResult のリスト (キャッシュ保存用)
     """
     # 手動単価が入力済みの部品
     manual_results: dict[str, PriceResult] = {
@@ -36,84 +48,74 @@ def fetch_prices(parts: list[Part], cache: dict[str, PriceResult]) -> list[Price
         for part in parts if part.manual_price is not None
     }
 
-    uncached = [
-        p for p in parts
-        if p.part_number not in cache and p.manual_price is None
-    ]
+    # スクレイピングが必要な (部品, ソース) のペアを収集
+    scrape_needed: list[tuple[Part, str]] = []
+    for part in parts:
+        if part.manual_price is not None:
+            continue
+        sources_to_try = _sources_for_part(part)
+        part_cache = cache.get(part.part_number, {})
+        for src in sources_to_try:
+            if src not in part_cache:
+                scrape_needed.append((part, src))
 
-    results: list[PriceResult] = []
-
-    if uncached:
+    # スクレイピング実行
+    newly_scraped: list[PriceResult] = []
+    if scrape_needed:
         with sync_playwright() as pw:
             browser = pw.firefox.launch(headless=is_headless())
             session_state = load_misumi_session() if has_misumi_session() else None
             context = _create_context(browser, storage_state=session_state)
             page = context.new_page()
 
-            for part in parts:
-                if part.manual_price is not None:
-                    results.append(manual_results[part.part_number])
-                elif part.part_number in cache:
-                    cached = cache[part.part_number]
-                    cached.from_cache = True
-                    results.append(cached)
-                else:
-                    results.append(_fetch_single(page, part))
+            for part, src in scrape_needed:
+                result = SCRAPERS[src].fetch_price(page, part.part_number)
+                newly_scraped.append(result)
 
             browser.close()
-    else:
-        for part in parts:
-            if part.manual_price is not None:
-                results.append(manual_results[part.part_number])
-            else:
-                cached = cache[part.part_number]
-                cached.from_cache = True
-                results.append(cached)
 
-    return results
-
-
-def _fetch_single(page: Page, part: Part) -> PriceResult:
-    """
-    1部品の価格を取得する。
-    - 仕入先指定あり: 指定先で取得、失敗時は他ソースにフォールバック
-    - 仕入先指定なし: 全ソースを試して最安値を返す
-    """
-    source = part.preferred_source.lower().strip()
-
-    if source and source in SCRAPERS:
-        # 指定仕入先で取得
-        result = SCRAPERS[source].fetch_price(page, part.part_number)
+    # 新規取得結果をキャッシュ辞書にマージ（この関数内での一時マージ）
+    merged_cache: CacheType = {pn: dict(srcs) for pn, srcs in cache.items()}
+    for result in newly_scraped:
         if result.unit_price is not None:
-            return result
-        # 失敗したら他ソースを試す
-        for fallback_name in DEFAULT_SOURCES:
-            if fallback_name == source:
-                continue
-            fb = SCRAPERS[fallback_name].fetch_price(page, part.part_number)
-            if fb.unit_price is not None:
-                return fb
-        return result  # 全て失敗した場合は最初のエラーを返す
+            merged_cache.setdefault(result.part_number, {})[result.source] = result
 
-    else:
-        # 仕入先未指定: 全ソースで取得して最安値を選択
-        found: list[PriceResult] = []
-        for src_name in DEFAULT_SOURCES:
-            r = SCRAPERS[src_name].fetch_price(page, part.part_number)
-            if r.unit_price is not None:
-                found.append(r)
+    # 各部品の最安値を決定
+    results: list[PriceResult] = []
+    for part in parts:
+        if part.manual_price is not None:
+            results.append(manual_results[part.part_number])
+            continue
 
-        if found:
-            # 最安値を返す
-            return min(found, key=lambda r: r.unit_price)
+        sources_to_try = _sources_for_part(part)
+        candidates = [
+            merged_cache[part.part_number][src]
+            for src in sources_to_try
+            if part.part_number in merged_cache
+            and src in merged_cache[part.part_number]
+            and merged_cache[part.part_number][src].unit_price is not None
+        ]
 
-        # 全て失敗
-        return PriceResult(
-            part_number=part.part_number,
-            unit_price=None,
-            source="",
-            error="全ての検索先で価格が見つかりませんでした",
-        )
+        if candidates:
+            results.append(min(candidates, key=lambda r: r.unit_price))
+        else:
+            results.append(PriceResult(
+                part_number=part.part_number,
+                unit_price=None,
+                source="",
+                error="全ての検索先で価格が見つかりませんでした",
+            ))
+
+    return results, newly_scraped
+
+
+def _sources_for_part(part: Part) -> list[str]:
+    """部品の仕入先希望から試すソースリストを返す"""
+    source = part.preferred_source.lower().strip()
+    if source and source in SCRAPERS:
+        # 指定先 + フォールバック（指定先が失敗した場合に備える）
+        return [source] + [s for s in DEFAULT_SOURCES if s != source]
+    return DEFAULT_SOURCES
 
 
 def _create_context(

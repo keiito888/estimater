@@ -69,7 +69,7 @@ def run(
     if uncached_count > 0:
         console.print(f"[bold]価格取得を開始します ({uncached_count} 件)...[/bold]")
 
-    results = fetch_prices(parts, cache)
+    results, newly_scraped = fetch_prices(parts, cache)
 
     # 結果表示
     _print_results_table(parts, results)
@@ -77,7 +77,7 @@ def run(
     # キャッシュ保存
     with Progress(SpinnerColumn("line"), TextColumn("{task.description}"), console=console) as progress:
         task = progress.add_task("キャッシュを保存しています...", total=None)
-        save_cache(spreadsheet, results)
+        save_cache(spreadsheet, newly_scraped)
 
         # 見積書シートに書き込み
         progress.update(task, description="見積書シートに書き込んでいます...")
@@ -214,10 +214,10 @@ def _run_estimation(spreadsheet_id: str, spreadsheet) -> None:
 
     try:
         cache = load_cache(spreadsheet)
-        results = fetch_prices(parts, cache)
+        results, newly_scraped = fetch_prices(parts, cache)
         _print_results_table(parts, results)
 
-        save_cache(spreadsheet, results)
+        save_cache(spreadsheet, newly_scraped)
         filled = write_back_part_info(spreadsheet, parts, results)
         items = [
             QuoteItem(row_num=i + 1, part=part, price_result=result)
