@@ -7,12 +7,13 @@ from typing import Literal, Optional
 @dataclass
 class Part:
     """入力シートの1行 = 1部品"""
-    category: str           # 部品種別 (例: 遮断器)
-    maker: str              # メーカー (例: 三菱電機)
-    part_number: str        # 型番 (例: NF30-CS 3P 5A)
-    quantity: int           # 数量
-    preferred_source: str   # 仕入先希望 (misumi / monotaro / 空欄)
-    note: str = ""          # 備考
+    category: str                    # 部品種別 (例: 遮断器)
+    maker: str                       # メーカー (例: 三菱電機)
+    part_number: str                 # 型番 (例: NF30-CS 3P 5A)
+    quantity: int                    # 数量
+    preferred_source: str            # 仕入先希望 (misumi / monotaro / 空欄)
+    note: str = ""                   # 備考
+    manual_price: Optional[float] = None  # 手動単価 (入力済みの場合はスクレイピングをスキップ)
 
 
 @dataclass

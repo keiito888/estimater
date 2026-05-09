@@ -16,6 +16,22 @@ def fetch_prices(parts: list[Part], cache: dict[str, PriceResult]) -> list[Price
     uncached = [p for p in parts if p.part_number not in cache]
     results: list[PriceResult] = []
 
+    # 手動単価が入力済みの部品はスクレイピング不要
+    manual_results: dict[str, PriceResult] = {}
+    for part in parts:
+        if part.manual_price is not None:
+            manual_results[part.part_number] = PriceResult(
+                part_number=part.part_number,
+                unit_price=part.manual_price,
+                source="手動入力",
+            )
+
+    # キャッシュ・手動入力のどちらもない部品のみスクレイピング対象
+    uncached = [
+        p for p in parts
+        if p.part_number not in cache and p.manual_price is None
+    ]
+
     if uncached:
         with sync_playwright() as pw:
             # Firefox を使用 (Chromiumよりボット検出を受けにくい)
@@ -26,20 +42,24 @@ def fetch_prices(parts: list[Part], cache: dict[str, PriceResult]) -> list[Price
             page = context.new_page()
 
             for part in parts:
-                if part.part_number in cache:
+                if part.manual_price is not None:
+                    results.append(manual_results[part.part_number])
+                elif part.part_number in cache:
                     cached = cache[part.part_number]
                     cached.source = "cache"
                     results.append(cached)
-                    continue
-                result = _fetch_single(page, part)
-                results.append(result)
+                else:
+                    results.append(_fetch_single(page, part))
 
             browser.close()
     else:
         for part in parts:
-            cached = cache[part.part_number]
-            cached.source = "cache"
-            results.append(cached)
+            if part.manual_price is not None:
+                results.append(manual_results[part.part_number])
+            else:
+                cached = cache[part.part_number]
+                cached.source = "cache"
+                results.append(cached)
 
     return results
 

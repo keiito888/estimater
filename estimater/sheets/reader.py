@@ -14,6 +14,7 @@ COL_PART_NUMBER = 2     # 型番
 COL_QUANTITY = 3        # 数量
 COL_PREFERRED = 4       # 仕入先希望
 COL_NOTE = 5            # 備考
+COL_MANUAL_PRICE = 6    # 手動単価 (入力済みならスクレイピングをスキップ)
 
 
 def read_parts(spreadsheet: gspread.Spreadsheet) -> list[Part]:
@@ -39,6 +40,12 @@ def read_parts(spreadsheet: gspread.Spreadsheet) -> list[Part]:
         except ValueError:
             quantity = 1
 
+        manual_price_str = _get(row, COL_MANUAL_PRICE).replace(",", "").replace("¥", "").replace("￥", "").strip()
+        try:
+            manual_price = float(manual_price_str) if manual_price_str else None
+        except ValueError:
+            manual_price = None
+
         parts.append(
             Part(
                 category=_get(row, COL_CATEGORY),
@@ -47,6 +54,7 @@ def read_parts(spreadsheet: gspread.Spreadsheet) -> list[Part]:
                 quantity=quantity,
                 preferred_source=_get(row, COL_PREFERRED),
                 note=_get(row, COL_NOTE),
+                manual_price=manual_price,
             )
         )
 
@@ -60,16 +68,16 @@ def ensure_input_sheet(spreadsheet: gspread.Spreadsheet) -> None:
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title=SHEET_NAME, rows=1000, cols=10)
         ws.update(
-            "A1:F1",
-            [["部品種別", "メーカー", "型番", "数量", "仕入先希望 (misumi/monotaro)", "備考"]],
+            "A1:G1",
+            [["部品種別", "メーカー", "型番", "数量", "仕入先希望 (misumi/monotaro)", "備考", "手動単価 (円)"]],
         )
         # サンプルデータ
         ws.update(
-            "A2:F4",
+            "A2:G4",
             [
-                ["遮断器", "三菱電機", "NF30-CS 3P 5A", "2", "misumi", "主幹"],
-                ["電磁接触器", "富士電機", "SC-N1", "4", "monotaro", ""],
-                ["端子台", "", "MKDS 1.5/2", "20", "", ""],
+                ["遮断器", "三菱電機", "NF30-CS 3P 5A", "2", "misumi", "主幹", ""],
+                ["電磁接触器", "富士電機", "SC-N1", "4", "monotaro", "", ""],
+                ["端子台", "", "MKDS 1.5/2", "20", "", "", ""],
             ],
         )
 
