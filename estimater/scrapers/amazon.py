@@ -7,6 +7,7 @@ from playwright.sync_api import Page
 
 from ..models import PriceResult
 from ..config import scrape_delay
+from .utils import part_number_in_page
 
 SEARCH_URL = "https://www.amazon.co.jp/s?k={part_number}"
 
@@ -24,11 +25,18 @@ def fetch_price(page: Page, part_number: str) -> PriceResult:
         product_name = _extract_first_product_name(page)
         product_url = _extract_first_product_url(page)
 
-        # 価格が見つかった場合は商品ページへ移動して確認
-        if not unit_price and product_url:
+        # 商品ページへ移動して型番一致確認と価格取得
+        if product_url:
             page.goto(product_url, wait_until="domcontentloaded", timeout=25000)
             time.sleep(2)
-            unit_price = _extract_detail_price(page)
+            page_text = page.inner_text("body")
+            if not part_number_in_page(part_number, page_text):
+                return PriceResult(
+                    part_number=part_number, unit_price=None, source="amazon",
+                    error="型番に一致する商品が見つかりませんでした",
+                )
+            if not unit_price:
+                unit_price = _extract_detail_price(page)
             if not product_name:
                 h1 = page.query_selector("h1#title, #productTitle")
                 if h1:

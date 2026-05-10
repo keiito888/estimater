@@ -7,6 +7,7 @@ from playwright.sync_api import Page
 
 from ..models import PriceResult
 from ..config import scrape_delay
+from .utils import part_number_in_page
 
 SEARCH_URL = "https://www.askul.co.jp/f/search/?word={part_number}"
 
@@ -19,23 +20,33 @@ def fetch_price(page: Page, part_number: str) -> PriceResult:
         time.sleep(2)
         scrape_delay()
 
-        # 最初の商品リンク (/p/XXXXXXXX/) をたどる
-        link = page.query_selector("a[href*='/p/']")
-        if not link:
+        # 検索結果リンクを複数取得し、型番を含む商品を探す
+        links = page.query_selector_all("a[href*='/p/']")
+        if not links:
             return PriceResult(
                 part_number=part_number, unit_price=None, source="askul",
                 error="商品が見つかりませんでした",
             )
 
-        href = link.get_attribute("href") or ""
-        product_url = (
-            "https://www.askul.co.jp" + href if href.startswith("/") else href
-        )
-        page.goto(product_url, wait_until="domcontentloaded", timeout=25000)
-        time.sleep(2)
-        scrape_delay()
+        for link in links[:5]:  # 上位5件を確認
+            href = link.get_attribute("href") or ""
+            product_url = (
+                "https://www.askul.co.jp" + href if href.startswith("/") else href
+            )
+            page.goto(product_url, wait_until="domcontentloaded", timeout=25000)
+            time.sleep(1)
 
-        return _extract_from_page(page, part_number, page.url)
+            if part_number_in_page(part_number, page.inner_text("body")):
+                scrape_delay()
+                return _extract_from_page(page, part_number, page.url)
+
+        # 型番が一致する商品が見つからなかった
+        return PriceResult(
+            part_number=part_number,
+            unit_price=None,
+            source="askul",
+            error="型番に一致する商品が見つかりませんでした",
+        )
 
     except Exception as e:
         return PriceResult(

@@ -7,6 +7,7 @@ from playwright.sync_api import Page
 
 from ..models import PriceResult
 from ..config import scrape_delay
+from .utils import part_number_in_page
 
 SEARCH_URL = "https://www.monotaro.com/s/?c=&q={part_number}"
 
@@ -41,6 +42,13 @@ def fetch_price(page: Page, part_number: str) -> PriceResult:
         page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
         time.sleep(2)
         scrape_delay()
+
+        # 型番が商品ページに含まれているか確認
+        if not part_number_in_page(part_number, page.inner_text("body")):
+            return PriceResult(
+                part_number=part_number, unit_price=None, source="monotaro",
+                error="型番に一致する商品が見つかりませんでした",
+            )
 
         return _extract_price_from_page(page, part_number, product_url)
 

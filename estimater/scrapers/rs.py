@@ -7,6 +7,7 @@ from playwright.sync_api import Page
 
 from ..models import PriceResult
 from ..config import scrape_delay
+from .utils import part_number_in_page
 
 SEARCH_URL = "https://jp.rs-online.com/web/c/?searchTerm={part_number}"
 
@@ -25,14 +26,15 @@ def fetch_price(page: Page, part_number: str) -> PriceResult:
         if "/web/p/" in current_url:
             return _extract_from_page(page, part_number, current_url)
 
-        # 検索結果ページから最初の商品リンクをたどる
-        link = page.query_selector("a[href*='/web/p/']")
-        if link:
+        # 検索結果から型番に一致する商品リンクをたどる（上位5件）
+        links = page.query_selector_all("a[href*='/web/p/']")
+        for link in links[:5]:
             href = link.get_attribute("href") or ""
             product_url = href if href.startswith("http") else f"https://jp.rs-online.com{href}"
             page.goto(product_url, wait_until="domcontentloaded", timeout=25000)
             time.sleep(2)
-            return _extract_from_page(page, part_number, page.url)
+            if part_number_in_page(part_number, page.inner_text("body")):
+                return _extract_from_page(page, part_number, page.url)
 
         # 検索結果ページ自体に価格がある場合
         return _extract_from_page(page, part_number, current_url)
